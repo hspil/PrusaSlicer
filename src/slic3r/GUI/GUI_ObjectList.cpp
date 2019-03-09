@@ -940,7 +940,9 @@ wxMenuItem* ObjectList::append_menu_item_settings(wxMenu* menu_)
 
     // Create new items for settings popupmenu
 
-    menu->m_separator_frst = menu->AppendSeparator();
+    if (printer_technology() == ptFFF ||
+        menu->GetMenuItems().size() > 0 && !menu->GetMenuItems().back()->IsSeparator())
+        menu->m_separator_frst = menu->AppendSeparator();
 
     // Add frequently settings
     create_freq_settings_popupmenu(menu);
@@ -992,12 +994,20 @@ void ObjectList::append_menu_item_fix_through_netfabb(wxMenu* menu)
     menu->AppendSeparator();
 }
 
+void ObjectList::append_menu_item_export_stl(wxMenu* menu) const 
+{
+    append_menu_item(menu, wxID_ANY, _(L("Export object as STL")) + dots, "",
+        [](wxCommandEvent&) { wxGetApp().plater()->export_stl(true); }, "", menu);
+    menu->AppendSeparator();
+}
+
 void ObjectList::create_object_popupmenu(wxMenu *menu)
 {
 #ifdef __WXOSX__  
     append_menu_item_rename(menu);
 #endif // __WXOSX__
 
+    append_menu_item_export_stl(menu);
     append_menu_item_fix_through_netfabb(menu);
 
     // Split object to parts
@@ -1017,7 +1027,8 @@ void ObjectList::create_sla_object_popupmenu(wxMenu *menu)
 #ifdef __WXOSX__  
     append_menu_item_rename(menu);
 #endif // __WXOSX__
-    
+
+    append_menu_item_export_stl(menu);
     append_menu_item_fix_through_netfabb(menu);
     // rest of a object_sla_menu will be added later in:
     // - append_menu_item_settings() -> for "Add (settings)"
@@ -1256,8 +1267,11 @@ void ObjectList::load_generic_subobject(const std::string& type_name, const Mode
 
     const GLCanvas3D::Selection& selection = wxGetApp().plater()->canvas3D()->get_selection();
     assert(obj_idx == selection.get_object_idx());
-    // Selected instance index in ModelObject. Only valid if there is only one instance selected in the selection.
-    int instance_idx = selection.get_instance_idx();
+
+    /** Any changes of the Object's composition is duplicated for all Object's Instances
+      * So, It's enough to take a bounding box of a first selected Instance and calculate Part(generic_subobject) position
+      */
+    int instance_idx = *selection.get_instance_idxs().begin();
     assert(instance_idx != -1);
     if (instance_idx == -1)
         return;
@@ -1914,11 +1928,23 @@ void ObjectList::update_selections()
     
     select_items(sels);
 
+    /* Because of ScrollLines() and GetItemRect() functions are implemented 
+     * only for GENERIC DataViewCtrl in current version of wxWidgets,
+     * use this part of code only for MSW 
+     */
+#if defined(wxUSE_GENERICDATAVIEWCTRL)
+    // Scroll selected Item in the middle of an object list
     if (GetSelection()) {
-        const int sel_item_row = m_objects_model->GetRowByItem(GetSelection());
-        ScrollLines(sel_item_row - m_selected_row);
-        m_selected_row = sel_item_row;
+        const wxRect& sel_rc = GetItemRect(GetSelection());
+        const wxRect& main_rc = GetClientRect();
+        if (sel_rc.GetBottom() <= main_rc.GetTop()+sel_rc.height ||
+            sel_rc.GetTop() >= main_rc.GetBottom() )
+        {
+            const wxRect& top_rc = GetItemRect(GetTopItem());
+            ScrollLines(int((sel_rc.y - top_rc.y) / top_rc.GetHeight()) - 0.5*GetCountPerPage());
+        }
     }
+#endif
 }
 
 void ObjectList::update_selections_on_canvas()
