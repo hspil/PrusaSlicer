@@ -171,6 +171,12 @@ private:
     SettingsBundle m_freq_settings_sla;
 #endif
 
+    inline void ensure_current_item_visible()
+    {
+        if (const auto &item = this->GetCurrentItem())
+            this->EnsureVisible(item);
+    }
+
 public:
     ObjectList(wxWindow* parent);
     ~ObjectList();
@@ -226,11 +232,12 @@ public:
     void                get_settings_choice(const wxString& category_name);
     void                get_freq_settings_choice(const wxString& bundle_name);
     void                show_settings(const wxDataViewItem settings_item);
+    bool                is_instance_or_object_selected();
 
     wxMenu*             append_submenu_add_generic(wxMenu* menu, const ModelVolumeType type);
     void                append_menu_items_add_volume(wxMenu* menu);
     wxMenuItem*         append_menu_item_split(wxMenu* menu);
-    wxMenuItem*         append_menu_item_layers_editing(wxMenu* menu);
+    wxMenuItem*         append_menu_item_layers_editing(wxMenu* menu, wxWindow* parent);
     wxMenuItem*         append_menu_item_settings(wxMenu* menu);
     wxMenuItem*         append_menu_item_change_type(wxMenu* menu);
     wxMenuItem*         append_menu_item_instance_to_object(wxMenu* menu, wxWindow* parent);
@@ -365,6 +372,8 @@ public:
     void update_printable_state(int obj_idx, int instance_idx);
     void toggle_printable_state(wxDataViewItem item);
 
+    void show_multi_selection_menu();
+
 private:
 #ifdef __WXOSX__
 //    void OnChar(wxKeyEvent& event);
@@ -383,8 +392,6 @@ private:
 	void OnEditingStarted(wxDataViewEvent &event);
 #endif /* __WXMSW__ */
     void OnEditingDone(wxDataViewEvent &event);
-
-    void show_multi_selection_menu();
     void extruder_selection();
     void set_extruder_for_selected_items(const int extruder) const ;
 

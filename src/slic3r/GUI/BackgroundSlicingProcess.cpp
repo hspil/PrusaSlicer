@@ -20,9 +20,6 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
 #include "libslic3r/GCode/PreviewData.hpp"
-#if ENABLE_THUMBNAIL_GENERATOR
-#include "libslic3r/GCode/ThumbnailData.hpp"
-#endif // ENABLE_THUMBNAIL_GENERATOR
 #include "libslic3r/libslic3r.h"
 
 #include <cassert>
@@ -36,6 +33,8 @@
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include "I18N.hpp"
+#include "GUI.hpp"
+#include "RemovableDriveManager.hpp"
 
 namespace Slic3r {
 
@@ -91,17 +90,33 @@ void BackgroundSlicingProcess::process_fff()
     m_print->process();
 	wxQueueEvent(GUI::wxGetApp().mainframe->m_plater, new wxCommandEvent(m_event_slicing_completed_id));
 #if ENABLE_THUMBNAIL_GENERATOR
-    m_fff_print->export_gcode(m_temp_output_path, m_gcode_preview_data, m_thumbnail_data);
+    m_fff_print->export_gcode(m_temp_output_path, m_gcode_preview_data, m_thumbnail_cb);
 #else
     m_fff_print->export_gcode(m_temp_output_path, m_gcode_preview_data);
 #endif // ENABLE_THUMBNAIL_GENERATOR
-    if (this->set_step_started(bspsGCodeFinalize)) {
+
+	if (this->set_step_started(bspsGCodeFinalize)) {
 	    if (! m_export_path.empty()) {
 	    	//FIXME localize the messages
 	    	// Perform the final post-processing of the export path by applying the print statistics over the file name.
 	    	std::string export_path = m_fff_print->print_statistics().finalize_output_path(m_export_path);
-		    if (copy_file(m_temp_output_path, export_path) != 0)
+			GUI::RemovableDriveManager::get_instance().update();
+			bool with_check = GUI::RemovableDriveManager::get_instance().is_path_on_removable_drive(export_path);
+			int copy_ret_val = copy_file(m_temp_output_path, export_path, with_check);
+			if (with_check && copy_ret_val == -2)
+			{
+				std::string err_msg = "Copying of the temporary G-code to the output G-code failed. There might be problem with target device, please try exporting again or using different device. The corrupted output G-code is at " + export_path + ".tmp.";
+				throw std::runtime_error(_utf8(L(err_msg)));
+			}
+			else if (copy_ret_val == -3)
+			{
+				std::string err_msg = "Renaming of the G-code after copying to the selected destination folder has failed. Current path is " + export_path + ".tmp. Please try exporting again.";
+				throw std::runtime_error(_utf8(L(err_msg)));
+			}
+			else if ( copy_ret_val != 0)
+			{
 	    		throw std::runtime_error(_utf8(L("Copying of the temporary G-code to the output G-code failed. Maybe the SD card is write locked?")));
+			}
 	    	m_print->set_status(95, _utf8(L("Running post-processing scripts")));
 	    	run_post_process_scripts(export_path, m_fff_print->config());
 	    	m_print->set_status(100, (boost::format(_utf8(L("G-code file exported to %1%"))) % export_path).str());
@@ -111,7 +126,7 @@ void BackgroundSlicingProcess::process_fff()
 			m_print->set_status(100, _utf8(L("Slicing complete")));
 	    }
 		this->set_step_done(bspsGCodeFinalize);
-    }
+	}
 }
 
 #if ENABLE_THUMBNAIL_GENERATOR
@@ -139,9 +154,12 @@ void BackgroundSlicingProcess::process_sla()
             m_sla_print->export_raster(zipper);
 
 #if ENABLE_THUMBNAIL_GENERATOR
-            if (m_thumbnail_data != nullptr)
+            if (m_thumbnail_cb != nullptr)
             {
-                for (const ThumbnailData& data : *m_thumbnail_data)
+                ThumbnailsList thumbnails;
+                m_thumbnail_cb(thumbnails, current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, true, true, true);
+//                m_thumbnail_cb(thumbnails, current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, false, true, true); // renders also supports and pad
+                for (const ThumbnailData& data : thumbnails)
                 {
                     if (data.is_valid())
                         write_thumbnail(zipper, data);
@@ -461,9 +479,12 @@ void BackgroundSlicingProcess::prepare_upload()
         Zipper zipper{source_path.string()};
         m_sla_print->export_raster(zipper, m_upload_job.upload_data.upload_path.string());
 #if ENABLE_THUMBNAIL_GENERATOR
-        if (m_thumbnail_data != nullptr)
+        if (m_thumbnail_cb != nullptr)
         {
-            for (const ThumbnailData& data : *m_thumbnail_data)
+            ThumbnailsList thumbnails;
+            m_thumbnail_cb(thumbnails, current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, true, true, true);
+//            m_thumbnail_cb(thumbnails, current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, false, true, true); // renders also supports and pad
+            for (const ThumbnailData& data : thumbnails)
             {
                 if (data.is_valid())
                     write_thumbnail(zipper, data);

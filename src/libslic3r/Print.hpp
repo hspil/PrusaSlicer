@@ -11,6 +11,11 @@
 #include "Slicing.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "GCode/WipeTower.hpp"
+#if ENABLE_THUMBNAIL_GENERATOR
+#include "GCode/ThumbnailData.hpp"
+#endif // ENABLE_THUMBNAIL_GENERATOR
+
+#include "libslic3r.h"
 
 namespace Slic3r {
 
@@ -19,14 +24,22 @@ class PrintObject;
 class ModelObject;
 class GCode;
 class GCodePreviewData;
-#if ENABLE_THUMBNAIL_GENERATOR
-struct ThumbnailData;
-#endif // ENABLE_THUMBNAIL_GENERATOR
 
 // Print step IDs for keeping track of the print state.
 enum PrintStep {
-    psSkirt, psBrim, psWipeTower, psGCodeExport, psCount,
+    psSkirt, 
+    psBrim,
+    // Synonym for the last step before the Wipe Tower / Tool Ordering, for the G-code preview slider to understand that 
+    // all the extrusions are there for the layer slider to add color changes etc.
+    psExtrusionPaths = psBrim,
+    psWipeTower,
+    // psToolOrdering is a synonym to psWipeTower, as the Wipe Tower calculates and modifies the ToolOrdering,
+    // while if printing without the Wipe Tower, the ToolOrdering is calculated as well.
+    psToolOrdering = psWipeTower,
+    psGCodeExport,
+    psCount,
 };
+
 enum PrintObjectStep {
     posSlice, posPerimeters, posPrepareInfill,
     posInfill, posSupportMaterial, posCount,
@@ -50,7 +63,7 @@ public:
     // Average diameter of nozzles participating on extruding this region.
     coordf_t                    bridging_height_avg(const PrintConfig &print_config) const;
 
-    // Collect extruder indices used to print this region's object.
+    // Collect 0-based extruder indices used to print this region's object.
 	void                        collect_object_printing_extruders(std::vector<unsigned int> &object_extruders) const;
 	static void                 collect_object_printing_extruders(const PrintConfig &print_config, const PrintRegionConfig &region_config, std::vector<unsigned int> &object_extruders);
 
@@ -79,6 +92,21 @@ typedef std::vector<Layer*> LayerPtrs;
 typedef std::vector<SupportLayer*> SupportLayerPtrs;
 class BoundingBoxf3;        // TODO: for temporary constructor parameter
 
+// Single instance of a PrintObject.
+// As multiple PrintObjects may be generated for a single ModelObject (their instances differ in rotation around Z),
+// ModelObject's instancess will be distributed among these multiple PrintObjects.
+struct PrintInstance
+{
+    // Parent PrintObject
+    PrintObject 		*print_object;
+    // Source ModelInstance of a ModelObject, for which this print_object was created.
+	const ModelInstance *model_instance;
+	// Shift of this instance towards its PrintObject
+	Point 				 shift;
+};
+
+typedef std::vector<PrintInstance> PrintInstances;
+
 class PrintObject : public PrintObjectBaseWithState<Print, PrintObjectStep, posCount>
 {
 private: // Prevents erroneous use by other classes.
@@ -92,17 +120,17 @@ public:
     // so that next call to make_perimeters() performs a union() before computing loops
     bool                    typed_slices;
 
-    Vec3crd                 size;           // XYZ in scaled coordinates
-
+    // XYZ in scaled coordinates
+    const Vec3crd&           size() const			{ return m_size; }
     const PrintObjectConfig& config() const         { return m_config; }    
     const LayerPtrs&        layers() const          { return m_layers; }
     const SupportLayerPtrs& support_layers() const  { return m_support_layers; }
     const Transform3d&      trafo() const           { return m_trafo; }
-    const Points&           copies() const          { return m_copies; }
-    const Point 			copy_center(size_t idx) const { return m_copies[idx] + m_copies_shift + Point(this->size.x() / 2, this->size.y() / 2); }
+    const PrintInstances&   instances() const       { return m_instances; }
+    const Point 			instance_center(size_t idx) const { return m_instances[idx].shift + m_copies_shift + Point(this->size().x() / 2, this->size().y() / 2); }
 
     // since the object is aligned to origin, bounding box coincides with size
-    BoundingBox bounding_box() const { return BoundingBox(Point(0,0), to_2d(this->size)); }
+    BoundingBox bounding_box() const { return BoundingBox(Point(0,0), to_2d(this->size())); }
 
     // adds region_id, too, if necessary
     void add_region_volume(unsigned int region_id, int volume_id, const t_layer_height_range &layer_range) {
@@ -113,11 +141,24 @@ public:
     // This is the *total* layer count (including support layers)
     // this value is not supposed to be compared with Layer::id
     // since they have different semantics.
-    size_t total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
-    size_t layer_count() const { return m_layers.size(); }
-    void clear_layers();
-    Layer* get_layer(int idx) { return m_layers[idx]; }
-    const Layer* get_layer(int idx) const { return m_layers[idx]; }
+    size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
+    size_t 			layer_count() const { return m_layers.size(); }
+    void 			clear_layers();
+    const Layer* 	get_layer(int idx) const { return m_layers[idx]; }
+    Layer* 			get_layer(int idx) 		 { return m_layers[idx]; }
+    // Get a layer exactly at print_z.
+    const Layer*	get_layer_at_printz(coordf_t print_z) const {
+    	auto it = Slic3r::lower_bound_by_predicate(m_layers.begin(), m_layers.end(), [print_z](const Layer *layer) { return layer->print_z < print_z; });
+		return (it == m_layers.end() || (*it)->print_z != print_z) ? nullptr : *it;
+	}
+    Layer*			get_layer_at_printz(coordf_t print_z) { return const_cast<Layer*>(std::as_const(*this).get_layer_at_printz(print_z)); }
+    // Get a layer approximately at print_z.
+    const Layer*	get_layer_at_printz(coordf_t print_z, coordf_t epsilon) const {
+        coordf_t limit = print_z + epsilon;
+    	auto it = Slic3r::lower_bound_by_predicate(m_layers.begin(), m_layers.end(), [limit](const Layer *layer) { return layer->print_z < limit; });
+		return (it == m_layers.end() || (*it)->print_z < print_z - epsilon) ? nullptr : *it;
+	}
+    Layer*			get_layer_at_printz(coordf_t print_z, coordf_t epsilon) { return const_cast<Layer*>(std::as_const(*this).get_layer_at_printz(print_z, epsilon)); }
 
     // print_z: top of the layer; slice_z: center of the layer.
     Layer* add_layer(int id, coordf_t height, coordf_t print_z, coordf_t slice_z);
@@ -151,7 +192,7 @@ public:
     std::vector<ExPolygons>     slice_support_blockers() const { return this->slice_support_volumes(ModelVolumeType::SUPPORT_BLOCKER); }
     std::vector<ExPolygons>     slice_support_enforcers() const { return this->slice_support_volumes(ModelVolumeType::SUPPORT_ENFORCER); }
 
-protected:
+private:
     // to be called from Print only.
     friend class Print;
 
@@ -161,7 +202,8 @@ protected:
     void                    config_apply(const ConfigBase &other, bool ignore_nonexistent = false) { this->m_config.apply(other, ignore_nonexistent); }
     void                    config_apply_only(const ConfigBase &other, const t_config_option_keys &keys, bool ignore_nonexistent = false) { this->m_config.apply_only(other, keys, ignore_nonexistent); }
     void                    set_trafo(const Transform3d& trafo) { m_trafo = trafo; }
-    PrintBase::ApplyStatus  set_copies(const Points &points);
+    PrintBase::ApplyStatus  set_instances(PrintInstances &&instances);
+    void 					set_trafo_and_instances(const Transform3d& trafo, PrintInstances &&instances) { this->set_trafo(trafo); this->set_instances(std::move(instances)); }
     // Invalidates the step, and its depending steps in PrintObject and Print.
     bool                    invalidate_step(PrintObjectStep step);
     // Invalidates all PrintObject and Print steps.
@@ -182,7 +224,7 @@ private:
 
     void _slice(const std::vector<coordf_t> &layer_height_profile);
     std::string _fix_slicing_errors();
-    void _simplify_slices(double distance);
+    void simplify_slices(double distance);
     bool has_support_material() const;
     void detect_surfaces_type();
     void process_external_surfaces();
@@ -193,11 +235,13 @@ private:
     void combine_infill();
     void _generate_support_material();
 
+    // XYZ in scaled coordinates
+    Vec3crd									m_size;
     PrintObjectConfig                       m_config;
     // Translation in Z + Rotation + Scaling / Mirroring.
     Transform3d                             m_trafo = Transform3d::Identity();
     // Slic3r::Point objects in scaled G-code coordinates
-    Points                                  m_copies;
+    std::vector<PrintInstance>              m_instances;
     // scaled coordinates to add to copies (to compensate for the alignment
     // operated when creating the object but still preserving a coherent API
     // for external callers)
@@ -219,7 +263,7 @@ struct WipeTowerData
     // Following section will be consumed by the GCodeGenerator.
     // Tool ordering of a non-sequential print has to be known to calculate the wipe tower.
     // Cache it here, so it does not need to be recalculated during the G-code generation.
-    ToolOrdering                                          tool_ordering;
+    ToolOrdering                                         &tool_ordering;
     // Cache of tool changes per print layer.
     std::unique_ptr<std::vector<WipeTower::ToolChangeResult>> priming;
     std::vector<std::vector<WipeTower::ToolChangeResult>> tool_changes;
@@ -232,7 +276,6 @@ struct WipeTowerData
     float                                                 brim_width;
 
     void clear() {
-        tool_ordering.clear();
         priming.reset(nullptr);
         tool_changes.clear();
         final_purge.reset(nullptr);
@@ -241,6 +284,14 @@ struct WipeTowerData
         depth = 0.f;
         brim_width = 0.f;
     }
+
+private:
+	// Only allow the WipeTowerData to be instantiated internally by Print, 
+	// as this WipeTowerData shares reference to Print::m_tool_ordering.
+	friend class Print;
+	WipeTowerData(ToolOrdering &tool_ordering) : tool_ordering(tool_ordering) { clear(); }
+	WipeTowerData(const WipeTowerData & /* rhs */) = delete;
+	WipeTowerData &operator=(const WipeTowerData & /* rhs */) = delete;
 };
 
 struct PrintStatistics
@@ -311,7 +362,7 @@ public:
     // Exports G-code into a file name based on the path_template, returns the file path of the generated G-code file.
     // If preview_data is not null, the preview_data is filled in for the G-code visualization (not used by the command line Slic3r).
 #if ENABLE_THUMBNAIL_GENERATOR
-    std::string         export_gcode(const std::string& path_template, GCodePreviewData* preview_data, const std::vector<ThumbnailData>* thumbnail_data = nullptr);
+    std::string         export_gcode(const std::string& path_template, GCodePreviewData* preview_data, ThumbnailsGeneratorCallback thumbnail_cb = nullptr);
 #else
     std::string         export_gcode(const std::string &path_template, GCodePreviewData *preview_data);
 #endif // ENABLE_THUMBNAIL_GENERATOR
@@ -345,6 +396,7 @@ public:
     const PrintConfig&          config() const { return m_config; }
     const PrintObjectConfig&    default_object_config() const { return m_default_object_config; }
     const PrintRegionConfig&    default_region_config() const { return m_default_region_config; }
+    //FIXME returning const vector to non-const PrintObject*, caller could modify PrintObjects!
     const PrintObjectPtrs&      objects() const { return m_objects; }
     PrintObject*                get_object(size_t idx) { return m_objects[idx]; }
     const PrintObject*          get_object(size_t idx) const { return m_objects[idx]; }
@@ -352,9 +404,6 @@ public:
     // How many of PrintObject::copies() over all print objects are there?
     // If zero, then the print is empty and the print shall not be executed.
     unsigned int                num_object_instances() const;
-
-    // Returns extruder this eec should be printed with, according to PrintRegion config:
-    static int                  get_extruder(const ExtrusionEntityCollection& fill, const PrintRegion &region);
 
     const ExtrusionEntityCollection& skirt() const { return m_skirt; }
     const ExtrusionEntityCollection& brim() const { return m_brim; }
@@ -364,11 +413,13 @@ public:
     // Wipe tower support.
     bool                        has_wipe_tower() const;
     const WipeTowerData&        wipe_tower_data(size_t extruders_cnt = 0, double first_layer_height = 0., double nozzle_diameter = 0.) const;
+    const ToolOrdering& 		tool_ordering() const { return m_tool_ordering; }
 
 	std::string                 output_filename(const std::string &filename_base = std::string()) const override;
 
     // Accessed by SupportMaterial
     const PrintRegion*  get_region(size_t idx) const  { return m_regions[idx]; }
+    const ToolOrdering& get_tool_ordering() const { return m_wipe_tower_data.tool_ordering; }   // #ys_FIXME just for testing
 
 protected:
     // methods for handling regions
@@ -407,7 +458,8 @@ private:
     ExtrusionEntityCollection               m_brim;
 
     // Following section will be consumed by the GCodeGenerator.
-    WipeTowerData                           m_wipe_tower_data;
+    ToolOrdering 							m_tool_ordering;
+    WipeTowerData                           m_wipe_tower_data {m_tool_ordering};
 
     // Estimated print time, filament consumed.
     PrintStatistics                         m_print_statistics;

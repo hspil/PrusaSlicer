@@ -58,15 +58,16 @@ enum Technology {
 struct Materials
 {
     Technology technology;
-    std::set<const Preset*> presets;
+    // use vector for the presets to purpose of save of presets sorting in the bundle
+    std::vector<const Preset*> presets;
     std::set<std::string> types;
 
     Materials(Technology technology) : technology(technology) {}
 
     void push(const Preset *preset);
     void clear();
-    bool containts(const Preset *preset) {
-        return presets.find(preset) != presets.end(); 
+    bool containts(const Preset *preset) const {
+        return std::find(presets.begin(), presets.end(), preset) != presets.end(); 
     }
 
     const std::string& appconfig_section() const;
@@ -79,6 +80,14 @@ struct Materials
                 cb(preset);
             }
         }
+    }
+
+    bool exist_preset(const std::string& preset_name) const
+    {
+        for (const Preset* preset : presets)
+            if (preset->name == preset_name)
+                return true;
+        return false;
     }
 
     static const std::string UNKNOWN;
@@ -140,6 +149,7 @@ struct PrinterPicker: wxPanel
     void select_all(bool select, bool alternates = false);
     void select_one(size_t i, bool select);
     bool any_selected() const;
+    std::set<std::string> get_selected_models() const ;
 
     int get_width() const { return width; }
     const std::vector<int>& get_button_indexes() { return m_button_indexes; }
@@ -206,6 +216,9 @@ struct PagePrinters: ConfigWizardPage
     void select_all(bool select, bool alternates = false);
     int get_width() const;
     bool any_selected() const;
+    std::set<std::string> get_selected_models();
+
+    std::string get_vendor_id() const { return printer_pickers.empty() ? "" : printer_pickers[0]->vendor_id; }
 
     virtual void set_run_reason(ConfigWizard::RunReason run_reason) override;
 };
@@ -240,10 +253,12 @@ template<class T, class D> struct DataList : public T
 
         return wxNOT_FOUND;
     }
+
+    int size() { return this->GetCount(); }
 };
 
 typedef DataList<wxListBox, std::string> StringList;
-typedef DataList<wxCheckListBox, Preset> PresetList;
+typedef DataList<wxCheckListBox, std::string> PresetList;
 
 struct PageMaterials: ConfigWizardPage
 {
@@ -289,6 +304,17 @@ struct PageUpdate: ConfigWizardPage
 
     PageUpdate(ConfigWizard *parent);
 };
+
+//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+#if ENABLE_CONFIGURABLE_PATHS_EXPORT_TO_3MF_AND_AMF
+struct PageReloadFromDisk : ConfigWizardPage
+{
+    bool full_pathnames;
+
+    PageReloadFromDisk(ConfigWizard* parent);
+};
+#endif // ENABLE_CONFIGURABLE_PATHS_EXPORT_TO_3MF_AND_AMF
+//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 struct PageMode: ConfigWizardPage
 {
@@ -343,7 +369,10 @@ struct PageTemperatures: ConfigWizardPage
     virtual void apply_custom_config(DynamicPrintConfig &config);
 };
 
-typedef std::map<std::string /* = vendor ID */, PagePrinters*> Pages3rdparty;
+// hypothetically, each vendor can has printers both of technologies (FFF and SLA)
+typedef std::map<std::string /* = vendor ID */, 
+                 std::pair<PagePrinters* /* = FFF page */, 
+                           PagePrinters* /* = SLA page */>> Pages3rdparty;
 
 
 class ConfigWizardIndex: public wxPanel
@@ -404,6 +433,8 @@ wxDEFINE_EVENT(EVT_INDEX_PAGE, wxCommandEvent);
 
 // ConfigWizard private data
 
+typedef std::map<std::string, std::set<std::string>> PresetAliases;
+
 struct ConfigWizard::priv
 {
     ConfigWizard *q;
@@ -415,6 +446,8 @@ struct ConfigWizard::priv
                                   // PrinterPickers state.
     Materials filaments;          // Holds available filament presets and their types & vendors
     Materials sla_materials;      // Ditto for SLA materials
+    PresetAliases aliases_fff;    // Map of aliase to preset names
+    PresetAliases aliases_sla;    // Map of aliase to preset names
     std::unique_ptr<DynamicPrintConfig> custom_config;           // Backing for custom printer definition
     bool any_fff_selected;        // Used to decide whether to display Filaments page
     bool any_sla_selected;        // Used to decide whether to display SLA Materials page
@@ -437,6 +470,11 @@ struct ConfigWizard::priv
     PageMaterials    *page_sla_materials = nullptr;
     PageCustom       *page_custom = nullptr;
     PageUpdate       *page_update = nullptr;
+//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+#if ENABLE_CONFIGURABLE_PATHS_EXPORT_TO_3MF_AND_AMF
+    PageReloadFromDisk *page_reload_from_disk = nullptr;
+#endif // ENABLE_CONFIGURABLE_PATHS_EXPORT_TO_3MF_AND_AMF
+//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     PageMode         *page_mode = nullptr;
     PageVendors      *page_vendors = nullptr;
     Pages3rdparty     pages_3rdparty;
@@ -454,7 +492,6 @@ struct ConfigWizard::priv
         : q(q)
         , filaments(T_FFF)
         , sla_materials(T_SLA)
-        , any_sla_selected(false)
     {}
 
     void load_pages();
@@ -470,14 +507,26 @@ struct ConfigWizard::priv
 
     void on_custom_setup();
     void on_printer_pick(PagePrinters *page, const PrinterPickerEvent &evt);
+    void select_default_materials_for_printer_model(const std::vector<VendorProfile::PrinterModel> &models,
+                                                    Technology                                      technology,
+                                                    const std::string &                             model_id);
+    void select_default_materials_if_needed(VendorProfile*     vendor_profile,
+                                            Technology         technology,
+                                            const std::string &model_id);
+    void selected_default_materials(Technology technology);
     void on_3rdparty_install(const VendorProfile *vendor, bool install);
 
+    bool on_bnt_finish();
+    bool check_materials_in_config(Technology technology, bool show_info_msg = true);
     void apply_config(AppConfig *app_config, PresetBundle *preset_bundle, const PresetUpdater *updater);
+    // #ys_FIXME_alise
+    void update_presets_in_config(const std::string& section, const std::string& alias_key, bool add);
+
+    bool check_fff_selected();        // Used to decide whether to display Filaments page
+    bool check_sla_selected();        // Used to decide whether to display SLA Materials page
 
     int em() const { return index->em(); }
 };
-
-
 
 }
 }

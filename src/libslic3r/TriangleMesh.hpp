@@ -23,6 +23,7 @@ class TriangleMesh
 public:
     TriangleMesh() : repaired(false) {}
     TriangleMesh(const Pointf3s &points, const std::vector<Vec3crd> &facets);
+    explicit TriangleMesh(const indexed_triangle_set &M);
 	void clear() { this->stl.clear(); this->its.clear(); this->repaired = false; }
     bool ReadSTLFile(const char* input_file) { return stl_open(&stl, input_file); }
     bool write_ascii(const char* output_file) { return stl_write_ascii(&this->stl, output_file, ""); }
@@ -197,6 +198,29 @@ private:
     void make_expolygons_simple(std::vector<IntersectionLine> &lines, ExPolygons* slices) const;
     void make_expolygons(std::vector<IntersectionLine> &lines, const float closing_radius, ExPolygons* slices) const;
 };
+
+inline void slice_mesh(
+    const TriangleMesh &                              mesh,
+    const std::vector<float> &                        z,
+    std::vector<Polygons> &                           layers,
+    TriangleMeshSlicer::throw_on_cancel_callback_type thr = nullptr)
+{
+    if (mesh.empty()) return;
+    TriangleMeshSlicer slicer(&mesh);
+    slicer.slice(z, &layers, thr);
+}
+
+inline void slice_mesh(
+    const TriangleMesh &                              mesh,
+    const std::vector<float> &                        z,
+    std::vector<ExPolygons> &                         layers,
+    float                                             closing_radius,
+    TriangleMeshSlicer::throw_on_cancel_callback_type thr = nullptr)
+{
+    if (mesh.empty()) return;
+    TriangleMeshSlicer slicer(&mesh);
+    slicer.slice(z, closing_radius, &layers, thr);
+}
 
 TriangleMesh make_cube(double x, double y, double z);
 

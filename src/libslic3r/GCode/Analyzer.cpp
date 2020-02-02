@@ -29,6 +29,9 @@ const std::string GCodeAnalyzer::Mm3_Per_Mm_Tag = "_ANALYZER_MM3_PER_MM:";
 const std::string GCodeAnalyzer::Width_Tag = "_ANALYZER_WIDTH:";
 const std::string GCodeAnalyzer::Height_Tag = "_ANALYZER_HEIGHT:";
 const std::string GCodeAnalyzer::Color_Change_Tag = "_ANALYZER_COLOR_CHANGE";
+const std::string GCodeAnalyzer::Pause_Print_Tag = "_ANALYZER_PAUSE_PRINT";
+const std::string GCodeAnalyzer::Custom_Code_Tag = "_ANALYZER_CUSTOM_CODE";
+const std::string GCodeAnalyzer::End_Pause_Print_Or_Custom_Code_Tag = "_ANALYZER_END_PAUSE_PRINT_OR_CUSTOM_CODE";
 
 const double GCodeAnalyzer::Default_mm3_per_mm = 0.0;
 const float GCodeAnalyzer::Default_Width = 0.0f;
@@ -105,24 +108,11 @@ GCodeAnalyzer::GCodeMove::GCodeMove(GCodeMove::EType type, const GCodeAnalyzer::
 {
 }
 
-GCodeAnalyzer::GCodeAnalyzer()
-{
-    reset();
-}
-
-void GCodeAnalyzer::set_extruder_offsets(const GCodeAnalyzer::ExtruderOffsetsMap& extruder_offsets)
-{
-    m_extruder_offsets = extruder_offsets;
-}
-
 void GCodeAnalyzer::set_extruders_count(unsigned int count)
 {
     m_extruders_count = count;
-}
-
-void GCodeAnalyzer::set_gcode_flavor(const GCodeFlavor& flavor)
-{
-    m_gcode_flavor = flavor;
+    for (unsigned int i=0; i<m_extruders_count; i++)
+        m_extruder_color[i] = i;
 }
 
 void GCodeAnalyzer::reset()
@@ -147,6 +137,7 @@ void GCodeAnalyzer::reset()
     m_moves_map.clear();
     m_extruder_offsets.clear();
     m_extruders_count = 1;
+    m_extruder_color.clear();
 }
 
 const std::string& GCodeAnalyzer::process_gcode(const std::string& gcode)
@@ -320,24 +311,22 @@ void GCodeAnalyzer::_processG1(const GCodeReader::GCodeLine& line)
 {
     auto axis_absolute_position = [this](GCodeAnalyzer::EAxis axis, const GCodeReader::GCodeLine& lineG1) -> float
     {
-        float current_absolute_position = _get_axis_position(axis);
-        float current_origin = _get_axis_origin(axis);
-        float lengthsScaleFactor = (_get_units() == GCodeAnalyzer::Inches) ? INCHES_TO_MM : 1.0f;
-
         bool is_relative = (_get_global_positioning_type() == Relative);
         if (axis == E)
             is_relative |= (_get_e_local_positioning_type() == Relative);
 
         if (lineG1.has(Slic3r::Axis(axis)))
         {
+            float lengthsScaleFactor = (_get_units() == GCodeAnalyzer::Inches) ? INCHES_TO_MM : 1.0f;
             float ret = lineG1.value(Slic3r::Axis(axis)) * lengthsScaleFactor;
-            return is_relative ? current_absolute_position + ret : ret + current_origin;
+            return is_relative ? _get_axis_position(axis) + ret : _get_axis_origin(axis) + ret;
         }
         else
-            return current_absolute_position;
+            return _get_axis_position(axis);
     };
 
     // updates axes positions from line
+
     float new_pos[Num_Axis];
     for (unsigned char a = X; a < Num_Axis; ++a)
     {
@@ -361,7 +350,7 @@ void GCodeAnalyzer::_processG1(const GCodeReader::GCodeLine& line)
     if (delta_pos[E] < 0.0f)
     {
         if ((delta_pos[X] != 0.0f) || (delta_pos[Y] != 0.0f) || (delta_pos[Z] != 0.0f))
-            type = GCodeMove::Move;
+        type = GCodeMove::Move;
         else
             type = GCodeMove::Retract;
     }
@@ -449,7 +438,9 @@ void GCodeAnalyzer::_processG92(const GCodeReader::GCodeLine& line)
 
     if (line.has_e())
     {
-        _set_axis_origin(E, _get_axis_position(E) - line.e() * lengthsScaleFactor);
+        // extruder coordinate can grow to the point where its float representation does not allow for proper addition with small increments,
+        // we set the value taken from the G92 line as the new current position for it
+        _set_axis_position(E, line.e() * lengthsScaleFactor);
         anyFound = true;
     }
 
@@ -595,7 +586,11 @@ void GCodeAnalyzer::_processT(const std::string& cmd)
                     BOOST_LOG_TRIVIAL(error) << "GCodeAnalyzer encountered an invalid toolchange, maybe from a custom gcode.";
             }
             else
+            {
                 _set_extruder_id(id);
+                if (_get_cp_color_id() != INT_MAX)
+                    _set_cp_color_id(m_extruder_color[id]);
+            }
 
             // stores tool change move
             _store_move(GCodeMove::Tool_change);
@@ -648,7 +643,33 @@ bool GCodeAnalyzer::_process_tags(const GCodeReader::GCodeLine& line)
     pos = comment.find(Color_Change_Tag);
     if (pos != comment.npos)
     {
-        _process_color_change_tag();
+        pos = comment.find_last_of(",T");
+        int extruder = pos == comment.npos ? 0 : std::atoi(comment.substr(pos + 1, comment.npos).c_str());
+        _process_color_change_tag(extruder);
+        return true;
+    }
+
+    // color change tag
+    pos = comment.find(Pause_Print_Tag);
+    if (pos != comment.npos)
+    {
+        _process_pause_print_or_custom_code_tag();
+        return true;
+    }
+
+    // color change tag
+    pos = comment.find(Custom_Code_Tag);
+    if (pos != comment.npos)
+    {
+        _process_pause_print_or_custom_code_tag();
+        return true;
+    }
+
+    // color change tag
+    pos = comment.find(End_Pause_Print_Or_Custom_Code_Tag);
+    if (pos != comment.npos)
+    {
+        _process_end_pause_print_or_custom_code_tag();
         return true;
     }
 
@@ -681,10 +702,24 @@ void GCodeAnalyzer::_process_height_tag(const std::string& comment, size_t pos)
     _set_height((float)::strtod(comment.substr(pos + Height_Tag.length()).c_str(), nullptr));
 }
 
-void GCodeAnalyzer::_process_color_change_tag()
+void GCodeAnalyzer::_process_color_change_tag(int extruder)
 {
-    m_state.cur_cp_color_id++;
-    _set_cp_color_id(m_state.cur_cp_color_id);
+    m_extruder_color[extruder] = m_extruders_count + m_state.cp_color_counter; // color_change position in list of color for preview
+    m_state.cp_color_counter++;
+
+    if (_get_extruder_id() == extruder)
+        _set_cp_color_id(m_extruder_color[extruder]);
+}
+
+void GCodeAnalyzer::_process_pause_print_or_custom_code_tag()
+{
+    _set_cp_color_id(INT_MAX);
+}
+
+void GCodeAnalyzer::_process_end_pause_print_or_custom_code_tag()
+{
+    if (_get_cp_color_id() == INT_MAX)
+        _set_cp_color_id(m_extruder_color[_get_extruder_id()]);
 }
 
 void GCodeAnalyzer::_set_units(GCodeAnalyzer::EUnits units)
@@ -921,7 +956,7 @@ void GCodeAnalyzer::_calc_gcode_preview_extrusion_layers(GCodePreviewData& previ
 				GCodePreviewData::Extrusion::Path &path = paths.back();
                 path.polyline = polyline;
 				path.extrusion_role = data.extrusion_role;
-				path.mm3_per_mm = data.mm3_per_mm;
+				path.mm3_per_mm = float(data.mm3_per_mm);
 				path.width = data.width;
 				path.height = data.height;
                 path.feedrate = data.feedrate;
@@ -943,7 +978,7 @@ void GCodeAnalyzer::_calc_gcode_preview_extrusion_layers(GCodePreviewData& previ
     float volumetric_rate = FLT_MAX;
     GCodePreviewData::Range height_range;
     GCodePreviewData::Range width_range;
-    GCodePreviewData::Range feedrate_range;
+    GCodePreviewData::MultiRange<GCodePreviewData::FeedrateKind> feedrate_range;
     GCodePreviewData::Range volumetric_rate_range;
     GCodePreviewData::Range fan_speed_range;
 
@@ -978,7 +1013,7 @@ void GCodeAnalyzer::_calc_gcode_preview_extrusion_layers(GCodePreviewData& previ
             volumetric_rate = move.data.feedrate * (float)move.data.mm3_per_mm;
             height_range.update_from(move.data.height);
             width_range.update_from(move.data.width);
-            feedrate_range.update_from(move.data.feedrate);
+            feedrate_range.update_from(move.data.feedrate, GCodePreviewData::FeedrateKind::EXTRUSION);
             volumetric_rate_range.update_from(volumetric_rate);
             fan_speed_range.update_from(move.data.fan_speed);
         }
@@ -1031,7 +1066,7 @@ void GCodeAnalyzer::_calc_gcode_preview_travel(GCodePreviewData& preview_data, s
 
     GCodePreviewData::Range height_range;
     GCodePreviewData::Range width_range;
-    GCodePreviewData::Range feedrate_range;
+    GCodePreviewData::MultiRange<GCodePreviewData::FeedrateKind> feedrate_range;
 
     // to avoid to call the callback too often
     unsigned int cancel_callback_threshold = (unsigned int)std::max((int)travel_moves->second.size() / 25, 1);
@@ -1071,7 +1106,7 @@ void GCodeAnalyzer::_calc_gcode_preview_travel(GCodePreviewData& preview_data, s
         extruder_id = move.data.extruder_id;
         height_range.update_from(move.data.height);
         width_range.update_from(move.data.width);
-        feedrate_range.update_from(move.data.feedrate);
+        feedrate_range.update_from(move.data.feedrate, GCodePreviewData::FeedrateKind::TRAVEL);
     }
 
     // store last polyline

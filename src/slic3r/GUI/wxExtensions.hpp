@@ -5,12 +5,11 @@
 #include <wx/combo.h>
 #include <wx/dataview.h>
 #include <wx/dc.h>
-#include <wx/collpane.h>
 #include <wx/wupdlock.h>
 #include <wx/button.h>
 #include <wx/sizer.h>
-#include <wx/slider.h>
 #include <wx/menu.h>
+#include <wx/bmpcbox.h>
 #include <wx/wx.h>
 
 #include <vector>
@@ -47,15 +46,25 @@ wxMenuItem* append_menu_radio_item(wxMenu* menu, int id, const wxString& string,
 wxMenuItem* append_menu_check_item(wxMenu* menu, int id, const wxString& string, const wxString& description,
     std::function<void(wxCommandEvent& event)> cb, wxEvtHandler* event_handler);
 
+void enable_menu_item(wxUpdateUIEvent& evt, std::function<bool()> const cb_condition, wxMenuItem* item, wxWindow* win);
+
 class wxDialog;
+class wxBitmapComboBox;
+
 void    edit_tooltip(wxString& tooltip);
 void    msw_buttons_rescale(wxDialog* dlg, const int em_unit, const std::vector<int>& btn_ids);
 int     em_unit(wxWindow* win);
 
-wxBitmap create_scaled_bitmap(wxWindow *win, const std::string& bmp_name,
-    const int px_cnt = 16, const bool is_horizontal = false, const bool grayscale = false);
+wxBitmap create_scaled_bitmap(const std::string& bmp_name, wxWindow *win = nullptr, 
+    const int px_cnt = 16, const bool grayscale = false);
 
-std::vector<wxBitmap*> get_extruder_color_icons();
+std::vector<wxBitmap*> get_extruder_color_icons(bool thin_icon = false);
+void apply_extruder_selector(wxBitmapComboBox** ctrl,
+                             wxWindow* parent,
+                             const std::string& first_item = "",
+                             wxPoint pos = wxDefaultPosition,
+                             wxSize size = wxDefaultSize,
+                             bool use_thin_icon = false);
 
 class wxCheckListBoxComboPopup : public wxCheckListBox, public wxComboPopup
 {
@@ -92,6 +101,37 @@ public:
     void OnCheckListBox(wxCommandEvent& evt);
     void OnListBoxSelection(wxCommandEvent& evt);
 };
+
+namespace Slic3r {
+namespace GUI {
+// ***  PresetBitmapComboBox  ***
+
+// BitmapComboBox used to presets list on Sidebar and Tabs
+class PresetBitmapComboBox: public wxBitmapComboBox
+{
+public:
+    PresetBitmapComboBox(wxWindow* parent, const wxSize& size = wxDefaultSize);
+    ~PresetBitmapComboBox() {}
+
+#ifdef __APPLE__
+protected:
+    /* For PresetBitmapComboBox we use bitmaps that are created from images that are already scaled appropriately for Retina
+     * (Contrary to the intuition, the `scale` argument for Bitmap's constructor doesn't mean
+     * "please scale this to such and such" but rather
+     * "the wxImage is already sized for backing scale such and such". )
+     * Unfortunately, the constructor changes the size of wxBitmap too.
+     * Thus We need to use unscaled size value for bitmaps that we use
+     * to avoid scaled size of control items.
+     * For this purpose control drawing methods and
+     * control size calculation methods (virtual) are overridden.
+     **/
+    virtual bool OnAddBitmap(const wxBitmap& bitmap) override;
+    virtual void OnDrawItem(wxDC& dc, const wxRect& rect, int item, int flags) const override;
+#endif
+};
+
+}
+}
 
 
 // ***  wxDataViewTreeCtrlComboBox  ***
@@ -220,7 +260,7 @@ class ObjectDataViewModelNode
     Slic3r::ModelVolumeType         m_volume_type;
 
 public:
-    ObjectDataViewModelNode(const wxString &name,
+    ObjectDataViewModelNode(const wxString& name,
                             const wxString& extruder):
         m_parent(NULL),
         m_name(name),
@@ -466,6 +506,7 @@ public:
     wxDataViewItem  ReorganizeChildren( const int cur_volume_id,
                                         const int new_volume_id,
                                         const wxDataViewItem &parent);
+    wxDataViewItem  ReorganizeObjects( int current_id, int new_id);
 
     virtual bool    IsEnabled(const wxDataViewItem &item, unsigned int col) const override;
 
@@ -529,7 +570,8 @@ class BitmapTextRenderer : public wxDataViewCustomRenderer
 #endif //ENABLE_NONCUSTOM_DATA_VIEW_RENDERING
 {
 public:
-    BitmapTextRenderer(wxDataViewCellMode mode =
+    BitmapTextRenderer( wxWindow* parent,
+                        wxDataViewCellMode mode =
 #ifdef __WXOSX__
                                                         wxDATAVIEW_CELL_INERT
 #else
@@ -540,7 +582,10 @@ public:
 #if ENABLE_NONCUSTOM_DATA_VIEW_RENDERING
                             );
 #else
-                            ) : wxDataViewCustomRenderer(wxT("DataViewBitmapText"), mode, align) {}
+                            ) : 
+    wxDataViewCustomRenderer(wxT("DataViewBitmapText"), mode, align),
+    m_parent(parent)
+    {}
 #endif //ENABLE_NONCUSTOM_DATA_VIEW_RENDERING
 
     bool SetValue(const wxVariant &value);
@@ -568,8 +613,9 @@ public:
     bool        WasCanceled() const { return m_was_unusable_symbol; }
 
 private:
-    DataViewBitmapText m_value;
-    bool                    m_was_unusable_symbol {false};
+    DataViewBitmapText  m_value;
+    bool                m_was_unusable_symbol {false};
+    wxWindow*           m_parent {nullptr};
 };
 
 
@@ -709,10 +755,13 @@ public:
     ScalableBitmap() {};
     ScalableBitmap( wxWindow *parent,
                     const std::string& icon_name = "",
-                    const int px_cnt = 16,
-                    const bool is_horizontal = false);
+                    const int px_cnt = 16);
 
     ~ScalableBitmap() {}
+
+    wxSize  GetBmpSize() const;
+    int     GetBmpWidth() const;
+    int     GetBmpHeight() const;
 
     void                msw_rescale();
 
@@ -720,198 +769,13 @@ public:
     wxBitmap&           bmp()       { return m_bmp; }
     const std::string&  name() const{ return m_icon_name; }
 
+    int                 px_cnt()const           {return m_px_cnt;}
+
 private:
     wxWindow*       m_parent{ nullptr };
     wxBitmap        m_bmp = wxBitmap();
     std::string     m_icon_name = "";
     int             m_px_cnt {16};
-    bool            m_is_horizontal {false};
-};
-
-
-// ----------------------------------------------------------------------------
-// DoubleSlider
-// ----------------------------------------------------------------------------
-
-// custom message the slider sends to its parent to notify a tick-change:
-wxDECLARE_EVENT(wxCUSTOMEVT_TICKSCHANGED, wxEvent);
-
-enum SelectedSlider {
-    ssUndef,
-    ssLower,
-    ssHigher
-};
-enum TicksAction{
-    taOnIcon,
-    taAdd,
-    taDel
-};
-
-class DoubleSlider : public wxControl
-{
-public:
-    DoubleSlider(
-        wxWindow *parent,
-        wxWindowID id,
-        int lowerValue,
-        int higherValue,
-        int minValue,
-        int maxValue,
-        const wxPoint& pos = wxDefaultPosition,
-        const wxSize& size = wxDefaultSize,
-        long style = wxSL_VERTICAL,
-        const wxValidator& val = wxDefaultValidator,
-        const wxString& name = wxEmptyString);
-    ~DoubleSlider() {}
-
-    /* For exporting GCode in GCodeWriter is used XYZF_NUM(val) = PRECISION(val, 3) for XYZ values. 
-     * So, let use same value as a permissible error for layer height.
-     */
-    static double epsilon() { return 0.0011;}
-
-    void    msw_rescale();
-
-    int GetMinValue() const { return m_min_value; }
-    int GetMaxValue() const { return m_max_value; }
-    double GetMinValueD()  { return m_values.empty() ? 0. : m_values[m_min_value]; }
-    double GetMaxValueD() { return m_values.empty() ? 0. : m_values[m_max_value]; }
-    int GetLowerValue() const { return m_lower_value; }
-    int GetHigherValue() const { return m_higher_value; }
-    int GetActiveValue() const;
-    wxSize get_min_size() const ;
-    double GetLowerValueD()  { return get_double_value(ssLower); }
-    double GetHigherValueD() { return get_double_value(ssHigher); }
-    wxSize DoGetBestSize() const override;
-    void SetLowerValue(const int lower_val);
-    void SetHigherValue(const int higher_val);
-    // Set low and high slider position. If the span is non-empty, disable the "one layer" mode.
-    void SetSelectionSpan(const int lower_val, const int higher_val);
-    void SetMaxValue(const int max_value);
-    void SetKoefForLabels(const double koef) {
-        m_label_koef = koef;
-    }
-    void SetSliderValues(const std::vector<double>& values) {
-        m_values = values;
-    }
-    void ChangeOneLayerLock();
-    std::vector<double> GetTicksValues() const;
-    void SetTicksValues(const std::vector<double>& heights);
-    void EnableTickManipulation(bool enable = true) {
-        m_is_enabled_tick_manipulation = enable;
-    }
-    void DisableTickManipulation() {
-        EnableTickManipulation(false);
-    }
-
-    bool is_horizontal() const { return m_style == wxSL_HORIZONTAL; }
-    bool is_one_layer() const { return m_is_one_layer; }
-    bool is_lower_at_min() const { return m_lower_value == m_min_value; }
-    bool is_higher_at_max() const { return m_higher_value == m_max_value; }
-    bool is_full_span() const { return this->is_lower_at_min() && this->is_higher_at_max(); }
-
-    void OnPaint(wxPaintEvent& ) { render();}
-    void OnLeftDown(wxMouseEvent& event);
-    void OnMotion(wxMouseEvent& event);
-    void OnLeftUp(wxMouseEvent& event);
-    void OnEnterWin(wxMouseEvent& event) { enter_window(event, true); }
-    void OnLeaveWin(wxMouseEvent& event) { enter_window(event, false); }
-    void OnWheel(wxMouseEvent& event);
-    void OnKeyDown(wxKeyEvent &event);
-    void OnKeyUp(wxKeyEvent &event);
-    void OnChar(wxKeyEvent &event);
-    void OnRightDown(wxMouseEvent& event);
-    void OnRightUp(wxMouseEvent& event);
-
-protected:
-
-    void    render();
-    void    draw_focus_rect();
-    void    draw_action_icon(wxDC& dc, const wxPoint pt_beg, const wxPoint pt_end);
-    void    draw_scroll_line(wxDC& dc, const int lower_pos, const int higher_pos);
-    void    draw_thumb(wxDC& dc, const wxCoord& pos_coord, const SelectedSlider& selection);
-    void    draw_thumbs(wxDC& dc, const wxCoord& lower_pos, const wxCoord& higher_pos);
-    void    draw_ticks(wxDC& dc);
-    void    draw_colored_band(wxDC& dc);
-    void    draw_one_layer_icon(wxDC& dc);
-    void    draw_revert_icon(wxDC& dc);
-    void    draw_thumb_item(wxDC& dc, const wxPoint& pos, const SelectedSlider& selection);
-    void    draw_info_line_with_icon(wxDC& dc, const wxPoint& pos, SelectedSlider selection);
-    void    draw_thumb_text(wxDC& dc, const wxPoint& pos, const SelectedSlider& selection) const;
-
-    void    update_thumb_rect(const wxCoord& begin_x, const wxCoord& begin_y, const SelectedSlider& selection);
-    void    detect_selected_slider(const wxPoint& pt);
-    void    correct_lower_value();
-    void    correct_higher_value();
-    void    move_current_thumb(const bool condition);
-    void    action_tick(const TicksAction action);
-    void    enter_window(wxMouseEvent& event, const bool enter);
-
-    bool    is_point_in_rect(const wxPoint& pt, const wxRect& rect);
-    int     is_point_near_tick(const wxPoint& pt);
-
-    double      get_scroll_step();
-    wxString    get_label(const SelectedSlider& selection) const;
-    void        get_lower_and_higher_position(int& lower_pos, int& higher_pos);
-    int         get_value_from_position(const wxCoord x, const wxCoord y);
-    wxCoord     get_position_from_value(const int value);
-    wxSize      get_size();
-    void        get_size(int *w, int *h);
-    double      get_double_value(const SelectedSlider& selection);
-
-private:
-    bool        is_osx { false };
-    wxFont      m_font;
-    int         m_min_value;
-    int         m_max_value;
-    int         m_lower_value;
-    int         m_higher_value;
-    ScalableBitmap    m_bmp_thumb_higher;
-    ScalableBitmap    m_bmp_thumb_lower;
-    ScalableBitmap    m_bmp_add_tick_on;
-    ScalableBitmap    m_bmp_add_tick_off;
-    ScalableBitmap    m_bmp_del_tick_on;
-    ScalableBitmap    m_bmp_del_tick_off;
-    ScalableBitmap    m_bmp_one_layer_lock_on;
-    ScalableBitmap    m_bmp_one_layer_lock_off;
-    ScalableBitmap    m_bmp_one_layer_unlock_on;
-    ScalableBitmap    m_bmp_one_layer_unlock_off;
-    ScalableBitmap    m_bmp_revert;
-    SelectedSlider  m_selection;
-    bool        m_is_left_down = false;
-    bool        m_is_right_down = false;
-    bool        m_is_one_layer = false;
-    bool        m_is_focused = false;
-    bool        m_is_action_icon_focesed = false;
-    bool        m_is_one_layer_icon_focesed = false;
-    bool        m_is_enabled_tick_manipulation = true;
-
-    wxRect      m_rect_lower_thumb;
-    wxRect      m_rect_higher_thumb;
-    wxRect      m_rect_tick_action;
-    wxRect      m_rect_one_layer_icon;
-    wxRect      m_rect_revert_icon;
-    wxSize      m_thumb_size;
-    int         m_tick_icon_dim;
-    int         m_lock_icon_dim;
-    int         m_revert_icon_dim;
-    long        m_style;
-    float       m_label_koef = 1.0;
-
-// control's view variables
-    wxCoord SLIDER_MARGIN; // margin around slider
-
-    wxPen   DARK_ORANGE_PEN;
-    wxPen   ORANGE_PEN;
-    wxPen   LIGHT_ORANGE_PEN;
-
-    wxPen   DARK_GREY_PEN;
-    wxPen   GREY_PEN;
-    wxPen   LIGHT_GREY_PEN;
-
-    std::vector<wxPen*> m_line_pens;
-    std::vector<wxPen*> m_segm_pens;
-    std::set<int>       m_ticks;
-    std::vector<double> m_values;
 };
 
 
@@ -982,6 +846,7 @@ public:
 
     void SetBitmap_(const ScalableBitmap& bmp);
     void SetBitmapDisabled_(const ScalableBitmap &bmp);
+    int  GetBitmapHeight();
 
     void    msw_rescale();
 
@@ -991,6 +856,9 @@ private:
     std::string     m_disabled_icon_name = "";
     int             m_width {-1}; // should be multiplied to em_unit
     int             m_height{-1}; // should be multiplied to em_unit
+
+    // bitmap dimensions 
+    int             m_px_cnt{ 16 };
 };
 
 

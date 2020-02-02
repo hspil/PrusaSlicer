@@ -17,9 +17,6 @@ namespace Slic3r {
 
 class DynamicPrintConfig;
 class GCodePreviewData;
-#if ENABLE_THUMBNAIL_GENERATOR
-struct ThumbnailData;
-#endif // ENABLE_THUMBNAIL_GENERATOR
 class Model;
 class SLAPrint;
 
@@ -53,14 +50,14 @@ public:
 	void set_sla_print(SLAPrint *print) { m_sla_print = print; }
 	void set_gcode_preview_data(GCodePreviewData *gpd) { m_gcode_preview_data = gpd; }
 #if ENABLE_THUMBNAIL_GENERATOR
-    void set_thumbnail_data(const std::vector<ThumbnailData>* data) { m_thumbnail_data = data; }
+    void set_thumbnail_cb(ThumbnailsGeneratorCallback cb) { m_thumbnail_cb = cb; }
 #endif // ENABLE_THUMBNAIL_GENERATOR
 
-	// The following wxCommandEvent will be sent to the UI thread / Platter window, when the slicing is finished
+	// The following wxCommandEvent will be sent to the UI thread / Plater window, when the slicing is finished
 	// and the background processing will transition into G-code export.
 	// The wxCommandEvent is sent to the UI thread asynchronously without waiting for the event to be processed.
 	void set_slicing_completed_event(int event_id) { m_event_slicing_completed_id = event_id; }
-	// The following wxCommandEvent will be sent to the UI thread / Platter window, when the G-code export is finished.
+	// The following wxCommandEvent will be sent to the UI thread / Plater window, when the G-code export is finished.
 	// The wxCommandEvent is sent to the UI thread asynchronously without waiting for the event to be processed.
 	void set_finished_event(int event_id) { m_event_finished_id = event_id; }
 
@@ -159,8 +156,8 @@ private:
 	// Data structure, to which the G-code export writes its annotations.
 	GCodePreviewData 		   *m_gcode_preview_data = nullptr;
 #if ENABLE_THUMBNAIL_GENERATOR
-    // Data structures, used to write thumbnails into gcode.
-    const std::vector<ThumbnailData>* m_thumbnail_data = nullptr;
+    // Callback function, used to write thumbnails into gcode.
+    ThumbnailsGeneratorCallback m_thumbnail_cb = nullptr;
 #endif // ENABLE_THUMBNAIL_GENERATOR
 	// Temporary G-code, there is one defined for the BackgroundSlicingProcess, differentiated from the other processes by a process ID.
 	std::string 				m_temp_output_path;
@@ -189,9 +186,9 @@ private:
     void                throw_if_canceled() const { if (m_print->canceled()) throw CanceledException(); }
     void                prepare_upload();
 
-	// wxWidgets command ID to be sent to the platter to inform that the slicing is finished, and the G-code export will continue.
+	// wxWidgets command ID to be sent to the plater to inform that the slicing is finished, and the G-code export will continue.
 	int 						m_event_slicing_completed_id 	= 0;
-	// wxWidgets command ID to be sent to the platter to inform that the task finished.
+	// wxWidgets command ID to be sent to the plater to inform that the task finished.
 	int 						m_event_finished_id  			= 0;
 };
 

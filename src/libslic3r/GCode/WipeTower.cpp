@@ -474,6 +474,7 @@ WipeTower::WipeTower(const PrintConfig& config, const std::vector<std::vector<fl
     m_z_pos(0.f),
     m_is_first_layer(false),
     m_bridging(float(config.wipe_tower_bridging)),
+    m_no_sparse_layers(config.wipe_tower_no_sparse_layers),
     m_gcode_flavor(config.gcode_flavor),
     m_current_tool(initial_tool),
     wipe_volumes(wiping_matrix)
@@ -1003,9 +1004,10 @@ void WipeTower::toolchange_Change(
     writer.append("[toolchange_gcode]\n");
 
     // Travel to where we assume we are. Custom toolchange or some special T code handling (parking extruder etc)
-    // gcode could have left the extruder somewhere, we cannot just start extruding.
-	Vec2f current_pos = writer.pos_rotated();
-    writer.append(std::string("G1 X") + std::to_string(current_pos.x()) +  " Y" + std::to_string(current_pos.y()) +  "\n");
+    // gcode could have left the extruder somewhere, we cannot just start extruding. We should also inform the
+    // postprocessor that we absolutely want to have this in the gcode, even if it thought it is the same as before.
+    Vec2f current_pos = writer.pos_rotated();
+    writer.append(std::string("G1 X") + std::to_string(current_pos.x()) +  " Y" + std::to_string(current_pos.y()) + never_skip_tag() + "\n");
 
     // The toolchange Tn command will be inserted later, only in case that the user does
     // not provide a custom toolchange gcode.
@@ -1145,9 +1147,10 @@ WipeTower::ToolChangeResult WipeTower::finish_layer()
     writer.set_initial_position((m_left_to_right ? fill_box.ru : fill_box.lu), // so there is never a diagonal travel
                                  m_wipe_tower_width, m_wipe_tower_depth, m_internal_rotation);
 
+    bool toolchanges_on_layer = m_layer_info->toolchanges_depth() > WT_EPSILON;
 	box_coordinates box = fill_box;
     for (int i=0;i<2;++i) {
-        if (m_layer_info->toolchanges_depth() < WT_EPSILON) { // there were no toolchanges on this layer
+        if (! toolchanges_on_layer) {
             if (i==0) box.expand(m_perimeter_width);
             else box.expand(-m_perimeter_width);
         }
@@ -1201,9 +1204,12 @@ WipeTower::ToolChangeResult WipeTower::finish_layer()
 
     m_depth_traversed = m_wipe_tower_depth-m_perimeter_width;
 
-    // Ask our writer about how much material was consumed:
-    if (m_current_tool < m_used_filament_length.size())
-        m_used_filament_length[m_current_tool] += writer.get_and_reset_used_filament_length();
+
+    // Ask our writer about how much material was consumed.
+    // Skip this in case the layer is sparse and config option to not print sparse layers is enabled.
+    if (! m_no_sparse_layers || toolchanges_on_layer)
+        if (m_current_tool < m_used_filament_length.size())
+            m_used_filament_length[m_current_tool] += writer.get_and_reset_used_filament_length();
 
     ToolChangeResult result;
     result.priming      = false;

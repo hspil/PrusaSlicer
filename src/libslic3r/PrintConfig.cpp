@@ -62,6 +62,11 @@ void PrintConfigDef::init_common_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString(""));
 
+    def = this->add("thumbnails", coPoints);
+    def->label = L("Picture sizes to be stored into a .gcode and .sl1 files");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionPoints());
+
     def = this->add("layer_height", coFloat);
     def->label = L("Layer height");
     def->category = L("Layers and Perimeters");
@@ -1328,9 +1333,11 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("octoprint");
     def->enum_values.push_back("duet");
     def->enum_values.push_back("flashair");
+    def->enum_values.push_back("astrobox");
     def->enum_labels.push_back("OctoPrint");
     def->enum_labels.push_back("Duet");
     def->enum_labels.push_back("FlashAir");
+    def->enum_labels.push_back("AstroBox");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<PrintHostType>(htOctoPrint));
 
@@ -1836,6 +1843,14 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("If enabled, all printing extruders will be primed at the front edge of the print bed at the start of the print.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("wipe_tower_no_sparse_layers", coBool);
+    def->label = L("No sparse layers (EXPERIMENTAL)");
+    def->tooltip = L("If enabled, the wipe tower will not be printed on layers with no toolchanges. "
+                     "On layers with a toolchange, extruder will travel downward to print the wipe tower. "
+                     "User is responsible for ensuring there is no collision with the print.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("support_material", coBool);
     def->label = L("Generate support material");
@@ -2858,6 +2873,41 @@ void PrintConfigDef::init_sla_params()
     def->min = 0;
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0.3));
+    
+    def = this->add("hollowing_enable", coBool);
+    def->label = L("Enable hollowing");
+    def->category = L("Hollowing");
+    def->tooltip = L("Hollow out a model to have an empty interior");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
+    
+    def = this->add("hollowing_min_thickness", coFloat);
+    def->label = L("Hollowing thickness");
+    def->category = L("Hollowing");
+    def->tooltip  = L("Minimum wall thickness of a hollowed model.");
+    def->sidetext = L("mm");
+    def->min = 1;
+    def->max = 10;
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionFloat(3.));
+    
+    def = this->add("hollowing_quality", coFloat);
+    def->label = L("Hollowing accuracy");
+    def->category = L("Hollowing");
+    def->tooltip  = L("Performance vs accuracy of calculation. Lower values may produce unwanted artifacts.");
+    def->min = 0;
+    def->max = 1;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+    
+    def = this->add("hollowing_closing_distance", coFloat);
+    def->label = L("Hollowing closing distance");
+    def->category = L("Hollowing");
+    def->tooltip  = L("");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(2.0));
 }
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
@@ -3420,7 +3470,8 @@ CLIMiscConfigDef::CLIMiscConfigDef()
 
     def = this->add("loglevel", coInt);
     def->label = L("Logging level");
-    def->tooltip = L("Messages with severity lower or eqal to the loglevel will be printed out. 0:trace, 1:debug, 2:info, 3:warning, 4:error, 5:fatal");
+    def->tooltip = L("Sets logging sensitivity. 0:fatal, 1:error, 2:warning, 3:info, 4:debug, 5:trace\n"
+                     "For example. loglevel=2 logs fatal, error and warning level messages.");
     def->min = 0;
 
 #if (defined(_MSC_VER) || defined(__MINGW32__)) && defined(SLIC3R_GUI)

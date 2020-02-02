@@ -125,7 +125,7 @@ public:
     void        load_config(const DynamicPrintConfig& config);
     void        select_tab(size_t tab) const;
     void        select_view(const std::string& direction);
-    // Propagate changed configuration from the Tab to the Platter and save changes to the AppConfig
+    // Propagate changed configuration from the Tab to the Plater and save changes to the AppConfig
     void        on_config_changed(DynamicPrintConfig* cfg) const ;
 
     void        add_to_recent_projects(const wxString& filename);
@@ -135,7 +135,7 @@ public:
     Plater*             m_plater { nullptr };
     wxNotebook*         m_tabpanel { nullptr };
     wxProgressDialog*   m_progress_dialog { nullptr };
-    std::unique_ptr<ProgressStatusBar>  m_statusbar;
+    std::shared_ptr<ProgressStatusBar>  m_statusbar;
 };
 
 } // GUI

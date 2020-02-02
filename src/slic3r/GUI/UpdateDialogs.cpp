@@ -149,15 +149,15 @@ MsgDataIncompatible::MsgDataIncompatible(const std::unordered_map<std::string, w
     MsgDialog(nullptr, wxString::Format(_(L("%s incompatibility")), SLIC3R_APP_NAME), 
                        wxString::Format(_(L("%s configuration is incompatible")), SLIC3R_APP_NAME), wxID_NONE)
 {
-	logo->SetBitmap(create_scaled_bitmap(this, "PrusaSlicer_192px_grayscale.png", 192));
+	logo->SetBitmap(create_scaled_bitmap("PrusaSlicer_192px_grayscale.png", this, 192));
 
 	auto *text = new wxStaticText(this, wxID_ANY, wxString::Format(_(L(
 		"This version of %s is not compatible with currently installed configuration bundles.\n"
 		"This probably happened as a result of running an older %s after using a newer one.\n\n"
 
 		"You may either exit %s and try again with a newer version, or you may re-run the initial configuration. "
-		"Doing so will create a backup snapshot of the existing configuration before installing files compatible with this %s.\n"
-		)), SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME));
+		"Doing so will create a backup snapshot of the existing configuration before installing files compatible with this %s.")) + "\n", 
+        SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME));
 	text->Wrap(CONTENT_WIDTH * wxGetApp().em_unit());
 	content_sizer->Add(text);
 

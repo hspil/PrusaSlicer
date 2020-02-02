@@ -120,7 +120,7 @@ protected:
     Preset::Type        m_type;
 	std::string			m_name;
 	const wxString		m_title;
-	wxBitmapComboBox*	m_presets_choice;
+	PresetBitmapComboBox*	m_presets_choice;
 	ScalableButton*		m_btn_save_preset;
 	ScalableButton*		m_btn_delete_preset;
 	ScalableButton*		m_btn_hide_incompatible_presets;
@@ -231,7 +231,7 @@ public:
     // Counter for the updating (because of an update() function can have a recursive behavior):
     // 1. increase value from the very beginning of an update() function
     // 2. decrease value at the end of an update() function
-    // 3. propagate changed configuration to the Platter when (m_update_cnt == 0) only
+    // 3. propagate changed configuration to the Plater when (m_update_cnt == 0) only
     int                 m_update_cnt = 0;
 
 public:

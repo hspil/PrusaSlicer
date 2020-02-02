@@ -54,8 +54,7 @@ public:
 
     // There will be an entry for each system profile loaded, 
     // and the system profiles will point to the VendorProfile instances owned by PresetBundle::vendors.
-    // std::set<VendorProfile>     vendors;
-    VendorMap                      vendors;
+    VendorMap                   vendors;
 
     struct ObsoletePresets {
         std::vector<std::string> prints;
@@ -109,8 +108,8 @@ public:
     // Export a config bundle file containing all the presets and the names of the active presets.
     void                        export_configbundle(const std::string &path, bool export_system_settings = false);
 
-    // Update a filament selection combo box on the platter for an idx_extruder.
-    void                        update_platter_filament_ui(unsigned int idx_extruder, GUI::PresetComboBox *ui);
+    // Update a filament selection combo box on the plater for an idx_extruder.
+    void                        update_plater_filament_ui(unsigned int idx_extruder, GUI::PresetComboBox *ui);
 
     // Enable / disable the "- default -" preset.
     void                        set_default_suppressed(bool default_suppressed);
@@ -132,12 +131,14 @@ public:
 
     static bool                 parse_color(const std::string &scolor, unsigned char *rgb_out);
 
-    void                        load_default_preset_bitmaps(wxWindow *window);
+    void                        load_default_preset_bitmaps();
 
     // Set the is_visible flag for printer vendors, printer models and printer variants
     // based on the user configuration.
     // If the "vendor" section is missing, enable all models and variants of the particular vendor.
     void                        load_installed_printers(const AppConfig &config);
+
+    const std::string&          get_preset_name_by_alias(const Preset::Type& preset_type, const std::string& alias) const;
 
     static const char *PRUSA_BUNDLE;
 private:
@@ -159,7 +160,7 @@ private:
     // If it is not an external config, then the config will be stored into the user profile directory.
     void                        load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config);
     void                        load_config_file_config_bundle(const std::string &path, const boost::property_tree::ptree &tree);
-    void                        load_compatible_bitmaps(wxWindow *window);
+    void                        load_compatible_bitmaps();
 
     DynamicPrintConfig          full_fff_config() const;
     DynamicPrintConfig          full_sla_config() const;
